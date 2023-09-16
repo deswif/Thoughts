@@ -7,10 +7,9 @@
 
 import UIKit
 import SnapKit
+import SwiftUI
 
 class AuthViewController: UIViewController {
-    
-    let viewModel = AuthViewModel()
     
     let logo: UIImageView = {
         let image = UIImageView(image: UIImage(systemName: "lasso.and.sparkles"))
@@ -45,6 +44,8 @@ class AuthViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         
+        view.backgroundColor = .systemBackground
+        
         configureImage()
         configureSignInButton()
         configureRegisterButton()
@@ -69,7 +70,7 @@ class AuthViewController: UIViewController {
         signInButton.snp.makeConstraints { make in
             make.left.equalToSuperview().offset(50)
             make.right.equalToSuperview().offset(-50)
-            make.bottom.equalTo(self.view.snp_bottomMargin).offset(-30)
+            make.bottom.equalTo(self.view.snp_bottomMargin).offset(-40)
             make.height.equalTo(52)
         }
     }
@@ -89,19 +90,22 @@ class AuthViewController: UIViewController {
     
     
     @objc func didSignInTap() {
-        print("tapped")
+        let vc = LoginViewController()
+        navigationController?.pushViewController(vc, animated: true)
     }
     
     @objc func didRegisterTap() {
-        print("tapped")
+        let vc = RegisterViewController()
+        navigationController?.pushViewController(vc, animated: true)
     }
-}
-
-import SwiftUI
-
-struct ViewControllerProvider: PreviewProvider {
-    static var previews: some View {
-        AuthViewController().showPreview()
+    
+    
+    //MARK: - Preview
+    
+    struct Preview: PreviewProvider {
+        static var previews: some View {
+            UINavigationController(rootViewController: AuthViewController()).showPreview()
+        }
     }
 }
 
