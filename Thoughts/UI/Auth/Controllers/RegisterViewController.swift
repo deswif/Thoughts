@@ -10,11 +10,22 @@ import SwiftUI
 import RxSwift
 import RxCocoa
 import Combine
+import SnapKit
 
 class RegisterViewController: UIViewController {
     
-    let disposeBag = DisposeBag()
-    var cancellables = Set<AnyCancellable>()
+    private var previousKeyboardHeight: CGRect = .zero
+    
+    private let emailSubject = PassthroughSubject<String, Never>()
+    private let passwordSubject = PassthroughSubject<String, Never>()
+    private let nicknameSubject = PassthroughSubject<String, Never>()
+    private let nameSubject = PassthroughSubject<String, Never>()
+    
+    private let registerClickSubject = PassthroughSubject<RegisterViewModel.FieldsInfo, Never>()
+    
+    private let disposeBag = DisposeBag()
+    internal var cancellables = Set<AnyCancellable>()
+    
     
     lazy private var emailField: UITextField = {
         let field = makeTextField()
@@ -67,6 +78,13 @@ class RegisterViewController: UIViewController {
         return view
     }()
     
+    private let activityIndicator: UIActivityIndicatorView = {
+        let view = UIActivityIndicatorView(style: .medium)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        
+        return view
+    }()
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -82,6 +100,7 @@ class RegisterViewController: UIViewController {
         configureNicknameField()
         configureNameField()
         configureRegisterButton()
+        configureActivityIndicator()
         
         loadViewModel()
     }
@@ -113,7 +132,7 @@ class RegisterViewController: UIViewController {
     
     private func configureEmailField() {
         
-        emailField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { EventSubjects.emailSubject.send($0) }.disposed(by: disposeBag)
+        emailField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.emailSubject.send($0) }.disposed(by: disposeBag)
         
         emailField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -124,7 +143,7 @@ class RegisterViewController: UIViewController {
     
     private func configurePasswordField() {
         
-        passwordField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { EventSubjects.passwordSubject.send($0) }.disposed(by: disposeBag)
+        passwordField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.passwordSubject.send($0) }.disposed(by: disposeBag)
         
         passwordField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -135,7 +154,7 @@ class RegisterViewController: UIViewController {
     
     private func configureNicknameField() {
         
-        nicknameField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { EventSubjects.nicknameSubject.send($0) }.disposed(by: disposeBag)
+        nicknameField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.nicknameSubject.send($0) }.disposed(by: disposeBag)
         
         nicknameField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -146,7 +165,7 @@ class RegisterViewController: UIViewController {
     
     private func configureNameField() {
         
-        nameField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { EventSubjects.nameSubject.send($0) }.disposed(by: disposeBag)
+        nameField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.nameSubject.send($0) }.disposed(by: disposeBag)
         
         nameField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -169,6 +188,18 @@ class RegisterViewController: UIViewController {
         }
     }
     
+    private func configureActivityIndicator() {
+        
+        view.addSubview(activityIndicator)
+        
+        activityIndicator.snp.makeConstraints { make in
+            make.centerX.equalTo(registerButton.snp.centerX)
+            make.centerY.equalTo(registerButton.snp.centerY)
+            make.height.equalTo(registerButton.snp.height)
+            make.width.equalTo(activityIndicator.snp.height)
+        }
+    }
+    
     private func makeTextField() -> UITextField {
         let field = AuthField()
         field.returnKeyType = .done
@@ -179,8 +210,14 @@ class RegisterViewController: UIViewController {
         return field
     }
     
-    @objc private func didRegisterTap() {
-        print(emailField.text, passwordField.text, nicknameField.text, nameField.text)
+    private func didRegisterTap() {
+        guard let email = emailField.text, let password = passwordField.text, let nickname = nicknameField.text, let name = nameField.text else { return }
+        registerClickSubject.send(.init(email: email, password: password, username: nickname, name: name))
+    }
+    
+    private func didSignUp() {
+        let feedVC = FeedViewController()
+        navigationController?.setViewControllers([feedVC], animated: true)
     }
     
     //MARK: - Preview
@@ -204,16 +241,22 @@ extension RegisterViewController: UITextFieldDelegate {
 
 extension RegisterViewController: ViewModelDelegate {
     func createViewModel() -> RegisterViewModel {
-        return RegisterViewModel()
+        return RegisterViewModel(
+            createUser: CreateUserUseCase(
+                authRepository: DIContainer.shared.inject(type: AuthRepository.self),
+                userRepository: DIContainer.shared.inject(type: UserRepository.self)
+            ),
+            onSignUp: didSignUp
+        )
     }
     
     func events(for viewModel: RegisterViewModel) -> RegisterViewModel.Events {
         RegisterViewModel.Events(
-            emailText: EventSubjects.emailSubject.eraseToAnyPublisher(),
-            passwordText: EventSubjects.passwordSubject.eraseToAnyPublisher(),
-            nicknameText: EventSubjects.nicknameSubject.eraseToAnyPublisher(),
-            nameText: EventSubjects.nameSubject.eraseToAnyPublisher(),
-            registerClicks: PassthroughSubject<RegisterViewModel.FieldsInfo, Never>().eraseToAnyPublisher()
+            emailText: emailSubject.eraseToAnyPublisher(),
+            passwordText: passwordSubject.eraseToAnyPublisher(),
+            usernameText: nicknameSubject.eraseToAnyPublisher(),
+            nameText: nameSubject.eraseToAnyPublisher(),
+            registerClicks: registerClickSubject.eraseToAnyPublisher()
         )
     }
     
@@ -222,29 +265,34 @@ extension RegisterViewController: ViewModelDelegate {
         state.errorMessages.sink { message in
             print(message.description())
         }.store(in: &cancellables)
-
-        state.loadingProcessing.sink { isLoading in
-            print("loading")
+        
+        state.loadingProcessing.sink { [self] isLoading in
+            emailField.isEnabled = !isLoading
+            passwordField.isEnabled = !isLoading
+            nicknameField.isEnabled = !isLoading
+            nameField.isEnabled = !isLoading
+            
+            activityIndicator.isHidden = !isLoading
+            registerButton.isHidden = isLoading
+            
+            if isLoading {
+                activityIndicator.startAnimating()
+            } else {
+                activityIndicator.stopAnimating()
+            }
+            
         }.store(in: &cancellables)
         
-        state.buttonAvailable.sink { available in
-            print(available)
+        state.buttonAvailable.sink { [self] available in
+            registerButton.isEnabled = available
+            UIView.animate(withDuration: 0.3) { [self] in
+                registerButton.alpha = available ? 1 : 0.6
+            }
         }.store(in: &cancellables)
-    }
-    
-    private struct EventSubjects {
-        static let emailSubject = PassthroughSubject<String, Never>()
-        static let passwordSubject = PassthroughSubject<String, Never>()
-        static let nicknameSubject = PassthroughSubject<String, Never>()
-        static let nameSubject = PassthroughSubject<String, Never>()
     }
 }
 
 extension RegisterViewController {
-    
-    private struct KeyboardHolder {
-        static var previousKeyboardHeight: CGRect = .zero
-    }
     
     @objc func keyboardWillShowNotification(_ notification: Notification) {
         
@@ -278,9 +326,9 @@ extension RegisterViewController {
     
     private func setFieldsFor(keyboardFrame: CGRect, duration: TimeInterval, options: UIView.AnimationOptions) {
         
-        guard !keyboardFrame.equalTo(KeyboardHolder.previousKeyboardHeight) else { return }
+        guard !keyboardFrame.equalTo(previousKeyboardHeight) else { return }
         
-        KeyboardHolder.previousKeyboardHeight = keyboardFrame
+        previousKeyboardHeight = keyboardFrame
         
         var slideUp: CGFloat
         

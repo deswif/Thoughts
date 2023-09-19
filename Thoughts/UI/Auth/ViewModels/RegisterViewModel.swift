@@ -10,45 +10,73 @@ import Combine
 
 class RegisterViewModel: ViewModel {
     
+    private let createUser: CreateUserUseCase
+    
+    private let errorMessagesSubject = PassthroughSubject<ErrorMessage, Never>()
+    private let buttonAvailableSubject = CurrentValueSubject<Bool, Never>(false)
+    private let loadingProcessing = CurrentValueSubject<Bool, Never>(false)
+    
+    private var onSignUp: () -> Void
+    
+    private var cancellables = Set<AnyCancellable>()
+    
+    init(createUser: CreateUserUseCase, onSignUp: @escaping () -> Void) {
+        self.createUser = createUser
+        self.onSignUp = onSignUp
+    }
+    
     func transform(events: Events) -> States {
-        let buttonAvailable = events.emailText.combineLatest(events.passwordText, events.nicknameText, events.nameText) { [self] email, password, nickname, name in
-            return valid(email: email) && valid(password: password) && valid(nickname: nickname) && valid(name: name)
-        }.removeDuplicates().eraseToAnyPublisher()
         
-        let loadingProcessing = PassthroughSubject<Bool, Never>().eraseToAnyPublisher()
+        cancellables.forEach { $0.cancel() }
+        cancellables.removeAll()
         
-        let errorMessages = events.registerClicks.map { _ in ErrorMessage.unknown }.eraseToAnyPublisher()
-        
-        return States(errorMessages: errorMessages, buttonAvailable: buttonAvailable, loadingProcessing: loadingProcessing)
-    }
-    
-    private func valid(email: String) -> Bool {
-        let email = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let emailRegEx = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
-        
-        let emailPred = NSPredicate(format:"SELF MATCHES %@", emailRegEx)
-        return emailPred.evaluate(with: email)
-    }
-    
-    private func valid(password: String) -> Bool {
-        let password = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        return password.count >= 6
-    }
-    
-    private func valid(nickname: String) -> Bool {
-        let nickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let regex = try NSRegularExpression(pattern: "^[0-9a-z\\_\\.]{4,20}$", options: .caseInsensitive)
-            if regex.matches(in: nickname, options: [], range: NSMakeRange(0, nickname.count)).count > 0 {
-                return true
+        events.emailText
+            .combineLatest(events.passwordText, events.usernameText, events.nameText) { email, password, username, name in
+                FieldValidators.valid(email: email) &&
+                FieldValidators.valid(password: password) &&
+                FieldValidators.valid(username: username) &&
+                FieldValidators.valid(name: name)
             }
-        } catch {}
-        return false
-    }
-    
-    private func valid(name: String) -> Bool {
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            .removeDuplicates()
+            .sink { self.buttonAvailableSubject.send($0) }
+            .store(in: &cancellables)
+        
+        events.registerClicks
+            .filter { info in
+                FieldValidators.valid(email: info.email) &&
+                FieldValidators.valid(password: info.password) &&
+                FieldValidators.valid(username: info.username) &&
+                FieldValidators.valid(name: info.name)
+            }
+            .sink { [self] info in
+                loadingProcessing.send(true)
+                createUser.call(with: .init(email: info.email, password: info.password, username: info.username, name: info.name))
+                    .subscribe(on: WorkScheduler.backgroundWorkScheduler)
+                    .receive(on: WorkScheduler.mainScheduler)
+                    .timeout(10, scheduler: WorkScheduler.mainScheduler)
+                    .sink { [weak self] completion in
+                        switch completion {
+                        case .finished:
+                            break
+                        case .failure(let error):
+                            print(error)
+                            self?.errorMessagesSubject.send(.unknown)
+                            break
+                        }
+                        self?.loadingProcessing.send(false)
+                    } receiveValue: { [weak self] _ in
+                        self?.buttonAvailableSubject.send(false)
+                        self?.onSignUp()
+                    }
+                    .store(in: &cancellables)
+            }
+            .store(in: &cancellables)
+        
+        return States(
+            errorMessages: errorMessagesSubject.eraseToAnyPublisher(),
+            buttonAvailable: buttonAvailableSubject.eraseToAnyPublisher(),
+            loadingProcessing: loadingProcessing.eraseToAnyPublisher()
+        )
     }
 }
 
@@ -62,7 +90,7 @@ extension RegisterViewModel {
     struct Events {
         let emailText: AnyPublisher<String, Never>
         let passwordText: AnyPublisher<String, Never>
-        let nicknameText: AnyPublisher<String, Never>
+        let usernameText: AnyPublisher<String, Never>
         let nameText: AnyPublisher<String, Never>
         let registerClicks: AnyPublisher<FieldsInfo, Never>
     }
@@ -83,7 +111,7 @@ extension RegisterViewModel {
     struct FieldsInfo {
         let email: String
         let password: String
-        let nickname: String
+        let username: String
         let name: String
     }
 }
