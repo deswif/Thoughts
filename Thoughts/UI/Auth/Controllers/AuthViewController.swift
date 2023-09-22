@@ -11,6 +11,8 @@ import SwiftUI
 
 class AuthViewController: UIViewController {
     
+    var coordinator: AuthCoordinator?
+    
     let logo: UIImageView = {
         let image = UIImageView(image: UIImage(systemName: "lasso.and.sparkles"))
         image.translatesAutoresizingMaskIntoConstraints = false
@@ -90,13 +92,11 @@ class AuthViewController: UIViewController {
     
     
     @objc func didSignInTap() {
-        let vc = LoginViewController()
-        navigationController?.pushViewController(vc, animated: true)
+        coordinator?.signIn()
     }
     
     @objc func didRegisterTap() {
-        let vc = RegisterViewController()
-        navigationController?.pushViewController(vc, animated: true)
+        coordinator?.registerAccount()
     }
     
     

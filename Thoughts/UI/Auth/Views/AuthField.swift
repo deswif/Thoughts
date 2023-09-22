@@ -14,6 +14,8 @@ class AuthField: UITextField {
         
         backgroundColor = .systemGray4
         layer.cornerRadius = 10
+        returnKeyType = .done
+        autocorrectionType = .no
     }
     
     required init?(coder: NSCoder) {

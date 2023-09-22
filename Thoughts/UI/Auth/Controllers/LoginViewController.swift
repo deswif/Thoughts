@@ -15,25 +15,24 @@ class LoginViewController: UIViewController {
     
     private var previousKeyboardHeight: CGRect = .zero
     
-    private let emailSubject = PassthroughSubject<String, Never>()
-    private let passwordSubject = PassthroughSubject<String, Never>()
-    
-    private let signInClickSubject = PassthroughSubject<LoginViewModel.FieldsInfo, Never>()
-    
     private let disposeBag = DisposeBag()
-    internal var cancellables = Set<AnyCancellable>()
+    private var cancellables = Set<AnyCancellable>()
     
-    lazy private var emailField: UITextField = {
-        let field = makeTextField()
+    private let viewModel: LoginViewModel
+    
+    private let emailField: UITextField = {
+        let field = AuthField()
         field.placeholder = "Email"
+        field.translatesAutoresizingMaskIntoConstraints = false
         
         return field
     }()
     
-    lazy private var passwordField: UITextField = {
-        let field = makeTextField()
+    private let passwordField: UITextField = {
+        let field = AuthField()
         field.placeholder = "Password"
         field.isSecureTextEntry = true
+        field.translatesAutoresizingMaskIntoConstraints = false
         
         return field
     }()
@@ -65,7 +64,17 @@ class LoginViewController: UIViewController {
         
         return view
     }()
-
+    
+    init(viewModel: LoginViewModel) {
+        self.viewModel = viewModel
+        
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -74,14 +83,14 @@ class LoginViewController: UIViewController {
         
         view.backgroundColor = .systemBackground
         
-        layoutFields()
-        
+        configureFields()
         configureEmailField()
         configurePasswordField()
         configureSignInButton()
         configureActivityIndicator()
         
-        loadViewModel()
+        listenState()
+        
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -89,7 +98,7 @@ class LoginViewController: UIViewController {
         NotificationCenter.default.addObserver(self, selector: #selector(LoginViewController.keyboardWillHideNotification(_:)), name: UIWindow.keyboardWillHideNotification, object: nil)
     }
     
-    private func layoutFields() {
+    private func configureFields() {
         
         view.addSubview(fieldsStackView)
         
@@ -105,7 +114,13 @@ class LoginViewController: UIViewController {
     
     private func configureEmailField() {
         
-        emailField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.emailSubject.send($0) }.disposed(by: disposeBag)
+        emailField.delegate = self
+        
+        emailField.rx.text
+            .filter { $0 != nil }
+            .map { $0! }
+            .subscribe { self.viewModel.emailChanged(to: $0) }
+            .disposed(by: disposeBag)
         
         emailField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -116,7 +131,13 @@ class LoginViewController: UIViewController {
     
     private func configurePasswordField() {
         
-        passwordField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.passwordSubject.send($0) }.disposed(by: disposeBag)
+        passwordField.delegate = self
+        
+        passwordField.rx.text
+            .filter { $0 != nil }
+            .map { $0! }
+            .subscribe { self.viewModel.passwordChanged(to: $0) }
+            .disposed(by: disposeBag)
         
         passwordField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -151,35 +172,15 @@ class LoginViewController: UIViewController {
         }
     }
     
-    private func makeTextField() -> UITextField {
-        let field = AuthField()
-        field.returnKeyType = .done
-        field.autocorrectionType = .no
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.delegate = self
-        
-        return field
-    }
-    
     private func didSignInTap() {
         guard let email = emailField.text, let password = passwordField.text else { return }
-        signInClickSubject.send(.init(email: email, password: password))
+        self.viewModel.signInPressed(with: .init(email: email, password: password))
     }
     
     private func didSignIn() {
         let feedVC = FeedViewController()
         navigationController?.setViewControllers([feedVC], animated: true)
     }
-    
-    
-    //MARK: - Preview
-    
-    struct Provider: PreviewProvider {
-        static var previews: some View {
-            UINavigationController(rootViewController: LoginViewController()).showPreview()
-        }
-    }
-
 }
 
 extension LoginViewController: UITextFieldDelegate {
@@ -191,31 +192,14 @@ extension LoginViewController: UITextFieldDelegate {
     
 }
 
-extension LoginViewController: ViewModelDelegate {
+extension LoginViewController {
     
-    func createViewModel() -> LoginViewModel {
-        LoginViewModel(
-            signInUserUseCase: SignInUserUseCase(
-                authRepository: DIContainer.shared.inject(type: AuthRepository.self)
-            ),
-            onSignIn: didSignIn
-        )
-    }
-    
-    func events(for viewModel: LoginViewModel) -> LoginViewModel.Events {
-        LoginViewModel.Events(
-            emailText: emailSubject.eraseToAnyPublisher(),
-            passwordText: passwordSubject.eraseToAnyPublisher(),
-            signInClicks: signInClickSubject.eraseToAnyPublisher()
-        )
-    }
-    
-    func applyState(from viewModel: LoginViewModel, state: LoginViewModel.States) {
-        state.errorMessages.sink { message in
+    func listenState() {
+        viewModel.errorMessagesState.sink { message in
             print(message.description())
         }.store(in: &cancellables)
         
-        state.loadingProcessing.sink { [self] isLoading in
+        viewModel.loadingProcessingState.sink { [self] isLoading in
             emailField.isEnabled = !isLoading
             passwordField.isEnabled = !isLoading
             
@@ -230,8 +214,7 @@ extension LoginViewController: ViewModelDelegate {
             
         }.store(in: &cancellables)
         
-        state.buttonAvailable.sink { [self] available in
-            print(available)
+        viewModel.buttonAvailableState.sink { [self] available in
             signInButton.isEnabled = available
             UIView.animate(withDuration: 0.3) { [self] in
                 signInButton.alpha = available ? 1 : 0.6
@@ -279,8 +262,6 @@ extension LoginViewController {
             guard !keyboardFrame.equalTo(strongSelf.previousKeyboardHeight) else { return }
             
             strongSelf.previousKeyboardHeight = keyboardFrame
-            
-            print(keyboardFrame)
             
             var slideUp: CGFloat
             

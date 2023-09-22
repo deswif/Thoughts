@@ -8,30 +8,66 @@
 import Foundation
 import Combine
 
-class RegisterViewModel: ViewModel {
+class RegisterViewModel {
     
     private let createUser: CreateUserUseCase
     
-    private let errorMessagesSubject = PassthroughSubject<ErrorMessage, Never>()
-    private let buttonAvailableSubject = CurrentValueSubject<Bool, Never>(false)
-    private let loadingProcessing = CurrentValueSubject<Bool, Never>(false)
-    
-    private var onSignUp: () -> Void
-    
     private var cancellables = Set<AnyCancellable>()
     
-    init(createUser: CreateUserUseCase, onSignUp: @escaping () -> Void) {
-        self.createUser = createUser
-        self.onSignUp = onSignUp
+    private let emailTextEvents = PassthroughSubject<String, Never>()
+    private let passwordTextEvents = PassthroughSubject<String, Never>()
+    private let usernameTextEvents = PassthroughSubject<String, Never>()
+    private let nameTextEvents = PassthroughSubject<String, Never>()
+    private let registerClickEvents = PassthroughSubject<FieldsInfo, Never>()
+    
+    private let errorMessagesSubject = PassthroughSubject<ErrorMessage, Never>()
+    private let buttonAvailableSubject = CurrentValueSubject<Bool, Never>(false)
+    private let loadingProcessingSubject = CurrentValueSubject<Bool, Never>(false)
+    
+    
+    var errorMessagesState: AnyPublisher<ErrorMessage, Never> {
+        errorMessagesSubject.eraseToAnyPublisher()
     }
     
-    func transform(events: Events) -> States {
+    var buttonAvailableState: AnyPublisher<Bool, Never> {
+        buttonAvailableSubject.eraseToAnyPublisher()
+    }
+    
+    var loadingProcessingState: AnyPublisher<Bool, Never> {
+        loadingProcessingSubject.eraseToAnyPublisher()
+    }
+    
+    
+    func emailChanged(to email: String) {
+        emailTextEvents.send(email)
+    }
+    
+    func passwordChanged(to password: String) {
+        passwordTextEvents.send(password)
+    }
+    
+    func usernameChanged(to nickname: String) {
+        usernameTextEvents.send(nickname)
+    }
+    
+    func nameChanged(to name: String) {
+        nameTextEvents.send(name)
+    }
+    
+    func registerPressed(with info: FieldsInfo) {
+        registerClickEvents.send(info)
+    }
+    
+    
+    init(createUser: CreateUserUseCase) {
+        self.createUser = createUser
         
-        cancellables.forEach { $0.cancel() }
-        cancellables.removeAll()
-        
-        events.emailText
-            .combineLatest(events.passwordText, events.usernameText, events.nameText) { email, password, username, name in
+        listenFields()
+    }
+    
+    func listenFields() {
+        emailTextEvents
+            .combineLatest(passwordTextEvents, usernameTextEvents, nameTextEvents) { email, password, username, name in
                 FieldValidators.valid(email: email) &&
                 FieldValidators.valid(password: password) &&
                 FieldValidators.valid(username: username) &&
@@ -40,8 +76,10 @@ class RegisterViewModel: ViewModel {
             .removeDuplicates()
             .sink { self.buttonAvailableSubject.send($0) }
             .store(in: &cancellables)
-        
-        events.registerClicks
+    }
+    
+    func listenClicks() {
+        registerClickEvents
             .filter { info in
                 FieldValidators.valid(email: info.email) &&
                 FieldValidators.valid(password: info.password) &&
@@ -49,11 +87,11 @@ class RegisterViewModel: ViewModel {
                 FieldValidators.valid(name: info.name)
             }
             .sink { [self] info in
-                loadingProcessing.send(true)
+                loadingProcessingSubject.send(true)
                 createUser.call(with: .init(email: info.email, password: info.password, username: info.username, name: info.name))
                     .subscribe(on: WorkScheduler.backgroundWorkScheduler)
                     .receive(on: WorkScheduler.mainScheduler)
-                    .timeout(10, scheduler: WorkScheduler.mainScheduler)
+                    .timeout(10, scheduler: WorkScheduler.mainScheduler, customError: { TimeoutError() })
                     .sink { [weak self] completion in
                         switch completion {
                         case .finished:
@@ -63,36 +101,11 @@ class RegisterViewModel: ViewModel {
                             self?.errorMessagesSubject.send(.unknown)
                             break
                         }
-                        self?.loadingProcessing.send(false)
-                    } receiveValue: { [weak self] _ in
-                        self?.buttonAvailableSubject.send(false)
-                        self?.onSignUp()
-                    }
+                        self?.loadingProcessingSubject.send(false)
+                    } receiveValue: { _ in }
                     .store(in: &cancellables)
             }
             .store(in: &cancellables)
-        
-        return States(
-            errorMessages: errorMessagesSubject.eraseToAnyPublisher(),
-            buttonAvailable: buttonAvailableSubject.eraseToAnyPublisher(),
-            loadingProcessing: loadingProcessing.eraseToAnyPublisher()
-        )
-    }
-}
-
-extension RegisterViewModel {
-    struct States {
-        let errorMessages: AnyPublisher<ErrorMessage, Never>
-        let buttonAvailable: AnyPublisher<Bool, Never>
-        let loadingProcessing: AnyPublisher<Bool, Never>
-    }
-    
-    struct Events {
-        let emailText: AnyPublisher<String, Never>
-        let passwordText: AnyPublisher<String, Never>
-        let usernameText: AnyPublisher<String, Never>
-        let nameText: AnyPublisher<String, Never>
-        let registerClicks: AnyPublisher<FieldsInfo, Never>
     }
 }
 

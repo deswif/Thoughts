@@ -16,43 +16,41 @@ class RegisterViewController: UIViewController {
     
     private var previousKeyboardHeight: CGRect = .zero
     
-    private let emailSubject = PassthroughSubject<String, Never>()
-    private let passwordSubject = PassthroughSubject<String, Never>()
-    private let nicknameSubject = PassthroughSubject<String, Never>()
-    private let nameSubject = PassthroughSubject<String, Never>()
-    
-    private let registerClickSubject = PassthroughSubject<RegisterViewModel.FieldsInfo, Never>()
-    
     private let disposeBag = DisposeBag()
-    internal var cancellables = Set<AnyCancellable>()
+    private var cancellables = Set<AnyCancellable>()
     
+    private let viewModel: RegisterViewModel
     
-    lazy private var emailField: UITextField = {
-        let field = makeTextField()
+    private let emailField: UITextField = {
+        let field = AuthField()
         field.placeholder = "Email"
         field.keyboardType = .emailAddress
+        field.translatesAutoresizingMaskIntoConstraints = false
         
         return field
     }()
     
-    lazy private var passwordField: UITextField = {
-        let field = makeTextField()
+    private let passwordField: UITextField = {
+        let field = AuthField()
         field.placeholder = "Password"
         field.isSecureTextEntry = true
+        field.translatesAutoresizingMaskIntoConstraints = false
         
         return field
     }()
     
-    lazy private var nameField: UITextField = {
-        let field = makeTextField()
+    private let nameField: UITextField = {
+        let field = AuthField()
         field.placeholder = "Name"
+        field.translatesAutoresizingMaskIntoConstraints = false
         
         return field
     }()
     
-    lazy private var nicknameField: UITextField = {
-        let field = makeTextField()
+    private let usernameField: UITextField = {
+        let field = AuthField()
         field.placeholder = "Nickname"
+        field.translatesAutoresizingMaskIntoConstraints = false
         
         return field
     }()
@@ -85,6 +83,16 @@ class RegisterViewController: UIViewController {
         return view
     }()
     
+    init(viewModel: RegisterViewModel) {
+        self.viewModel = viewModel
+        
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -94,15 +102,14 @@ class RegisterViewController: UIViewController {
         view.backgroundColor = .systemBackground
         
         configureFieldStack()
-        
         configureEmailField()
         configurePasswordField()
-        configureNicknameField()
+        configureUsernameField()
         configureNameField()
         configureRegisterButton()
         configureActivityIndicator()
         
-        loadViewModel()
+        listenState()
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -120,7 +127,7 @@ class RegisterViewController: UIViewController {
         
         fieldsStackView.addArrangedSubview(emailField)
         fieldsStackView.addArrangedSubview(passwordField)
-        fieldsStackView.addArrangedSubview(nicknameField)
+        fieldsStackView.addArrangedSubview(usernameField)
         fieldsStackView.addArrangedSubview(nameField)
         
         fieldsStackView.snp.makeConstraints { make in
@@ -132,7 +139,13 @@ class RegisterViewController: UIViewController {
     
     private func configureEmailField() {
         
-        emailField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.emailSubject.send($0) }.disposed(by: disposeBag)
+        emailField.delegate = self
+        
+        emailField.rx.text
+            .filter { $0 != nil }
+            .map { $0! }
+            .subscribe { self.viewModel.emailChanged(to: $0) }
+            .disposed(by: disposeBag)
         
         emailField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -143,7 +156,13 @@ class RegisterViewController: UIViewController {
     
     private func configurePasswordField() {
         
-        passwordField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.passwordSubject.send($0) }.disposed(by: disposeBag)
+        passwordField.delegate = self
+        
+        passwordField.rx.text
+            .filter { $0 != nil }
+            .map { $0! }
+            .subscribe { self.viewModel.passwordChanged(to: $0) }
+            .disposed(by: disposeBag)
         
         passwordField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -152,11 +171,17 @@ class RegisterViewController: UIViewController {
         }
     }
     
-    private func configureNicknameField() {
+    private func configureUsernameField() {
         
-        nicknameField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.nicknameSubject.send($0) }.disposed(by: disposeBag)
+        usernameField.delegate = self
         
-        nicknameField.snp.makeConstraints { make in
+        usernameField.rx.text
+            .filter { $0 != nil }
+            .map { $0! }
+            .subscribe { self.viewModel.usernameChanged(to: $0) }
+            .disposed(by: disposeBag)
+        
+        usernameField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
             make.trailing.equalToSuperview()
             make.height.equalTo(52)
@@ -165,7 +190,13 @@ class RegisterViewController: UIViewController {
     
     private func configureNameField() {
         
-        nameField.rx.text.filter { $0 != nil }.map { $0! }.subscribe { self.nameSubject.send($0) }.disposed(by: disposeBag)
+        nameField.delegate = self
+        
+        nameField.rx.text
+            .filter { $0 != nil }
+            .map { $0! }
+            .subscribe { self.viewModel.nameChanged(to: $0) }
+            .disposed(by: disposeBag)
         
         nameField.snp.makeConstraints { make in
             make.leading.equalToSuperview()
@@ -178,7 +209,9 @@ class RegisterViewController: UIViewController {
         
         view.addSubview(registerButton)
         
-        registerButton.rx.tap.subscribe { [weak self] _ in self?.didRegisterTap() }.disposed(by: disposeBag)
+        registerButton.rx.tap
+            .subscribe { [weak self] _ in self?.didRegisterTap() }
+            .disposed(by: disposeBag)
         
         registerButton.snp.makeConstraints { make in
             make.leading.equalToSuperview().offset(50)
@@ -200,32 +233,14 @@ class RegisterViewController: UIViewController {
         }
     }
     
-    private func makeTextField() -> UITextField {
-        let field = AuthField()
-        field.returnKeyType = .done
-        field.autocorrectionType = .no
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.delegate = self
-        
-        return field
-    }
-    
     private func didRegisterTap() {
-        guard let email = emailField.text, let password = passwordField.text, let nickname = nicknameField.text, let name = nameField.text else { return }
-        registerClickSubject.send(.init(email: email, password: password, username: nickname, name: name))
+        guard let email = emailField.text, let password = passwordField.text, let nickname = usernameField.text, let name = nameField.text else { return }
+        viewModel.registerPressed(with: .init(email: email, password: password, username: nickname, name: name))
     }
     
     private func didSignUp() {
         let feedVC = FeedViewController()
         navigationController?.setViewControllers([feedVC], animated: true)
-    }
-    
-    //MARK: - Preview
-    
-    struct Provider: PreviewProvider {
-        static var previews: some View {
-            UINavigationController(rootViewController: RegisterViewController()).showPreview()
-        }
     }
 }
 
@@ -239,56 +254,43 @@ extension RegisterViewController: UITextFieldDelegate {
 
 //MARK: - View Model comunication
 
-extension RegisterViewController: ViewModelDelegate {
-    func createViewModel() -> RegisterViewModel {
-        return RegisterViewModel(
-            createUser: CreateUserUseCase(
-                authRepository: DIContainer.shared.inject(type: AuthRepository.self),
-                userRepository: DIContainer.shared.inject(type: UserRepository.self)
-            ),
-            onSignUp: didSignUp
-        )
-    }
+extension RegisterViewController {
     
-    func events(for viewModel: RegisterViewModel) -> RegisterViewModel.Events {
-        RegisterViewModel.Events(
-            emailText: emailSubject.eraseToAnyPublisher(),
-            passwordText: passwordSubject.eraseToAnyPublisher(),
-            usernameText: nicknameSubject.eraseToAnyPublisher(),
-            nameText: nameSubject.eraseToAnyPublisher(),
-            registerClicks: registerClickSubject.eraseToAnyPublisher()
-        )
-    }
-    
-    func applyState(from viewModel: RegisterViewModel, state: RegisterViewModel.States) {
+    func listenState() {
         
-        state.errorMessages.sink { message in
-            print(message.description())
-        }.store(in: &cancellables)
-        
-        state.loadingProcessing.sink { [self] isLoading in
-            emailField.isEnabled = !isLoading
-            passwordField.isEnabled = !isLoading
-            nicknameField.isEnabled = !isLoading
-            nameField.isEnabled = !isLoading
-            
-            activityIndicator.isHidden = !isLoading
-            registerButton.isHidden = isLoading
-            
-            if isLoading {
-                activityIndicator.startAnimating()
-            } else {
-                activityIndicator.stopAnimating()
+        viewModel.errorMessagesState
+            .sink { message in
+                print(message.description())
             }
-            
-        }.store(in: &cancellables)
+            .store(in: &cancellables)
         
-        state.buttonAvailable.sink { [self] available in
-            registerButton.isEnabled = available
-            UIView.animate(withDuration: 0.3) { [self] in
-                registerButton.alpha = available ? 1 : 0.6
+        viewModel.loadingProcessingState
+            .sink { [self] isLoading in
+                emailField.isEnabled = !isLoading
+                passwordField.isEnabled = !isLoading
+                usernameField.isEnabled = !isLoading
+                nameField.isEnabled = !isLoading
+                
+                activityIndicator.isHidden = !isLoading
+                registerButton.isHidden = isLoading
+                
+                if isLoading {
+                    activityIndicator.startAnimating()
+                } else {
+                    activityIndicator.stopAnimating()
+                }
+                
             }
-        }.store(in: &cancellables)
+            .store(in: &cancellables)
+        
+        viewModel.buttonAvailableState
+            .sink { [self] available in
+                registerButton.isEnabled = available
+                UIView.animate(withDuration: 0.3) { [self] in
+                    registerButton.alpha = available ? 1 : 0.6
+                }
+            }
+            .store(in: &cancellables)
     }
 }
 

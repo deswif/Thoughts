@@ -8,80 +8,91 @@
 import Foundation
 import Combine
 
-class LoginViewModel: ViewModel {
+class LoginViewModel {
     
     private let signInUser: SignInUserUseCase
     
-    private let errorMessagesSubject = PassthroughSubject<ErrorMessage, Never>()
-    private let buttonAvailableSubject = CurrentValueSubject<Bool, Never>(false)
-    private let loadingProcessing = CurrentValueSubject<Bool, Never>(false)
-    
-    private var onSignIn: () -> Void
-    
     private var bag = Set<AnyCancellable>()
     
-    init(signInUserUseCase: SignInUserUseCase, onSignIn: @escaping () -> Void) {
-        self.signInUser = signInUserUseCase
-        self.onSignIn = onSignIn
+    private let errorMessagesSubject = PassthroughSubject<ErrorMessage, Never>()
+    private let buttonAvailableSubject = CurrentValueSubject<Bool, Never>(false)
+    private let loadingProcessingSubject = CurrentValueSubject<Bool, Never>(false)
+    
+    private let emailTextEvents = PassthroughSubject<String, Never>()
+    private let passwordTextEvents = PassthroughSubject<String, Never>()
+    private let signInClicksEvents = PassthroughSubject<FieldsInfo, Never>()
+    
+    
+    var errorMessagesState: AnyPublisher<ErrorMessage, Never> {
+        errorMessagesSubject.eraseToAnyPublisher()
     }
     
-    func transform(events: Events) -> States {
-        bag.forEach { $0.cancel() }
-        bag.removeAll()
+    var buttonAvailableState: AnyPublisher<Bool, Never> {
+        buttonAvailableSubject.eraseToAnyPublisher()
+    }
+    
+    var loadingProcessingState: AnyPublisher<Bool, Never> {
+        loadingProcessingSubject.eraseToAnyPublisher()
+    }
+    
+    
+    func emailChanged(to text: String) {
+        emailTextEvents.send(text)
+    }
+    
+    func passwordChanged(to text: String) {
+        passwordTextEvents.send(text)
+    }
+    
+    func signInPressed(with info: FieldsInfo) {
+        signInClicksEvents.send(info)
+    }
+    
+    init(signInUserUseCase: SignInUserUseCase) {
+        self.signInUser = signInUserUseCase
         
-        events.emailText.combineLatest(events.passwordText) { email, password in
-            return FieldValidators.valid(email: email) &&
-            FieldValidators.valid(password: password)
-        }
-        .removeDuplicates()
-        .sink { self.buttonAvailableSubject.send($0) }
-        .store(in: &bag)
-        
-        events.signInClicks.filter { info in
-            FieldValidators.valid(email: info.email) &&
-            FieldValidators.valid(password: info.password)
-        }.sink { [self] info in
-            loadingProcessing.send(true)
-            signInUser.call(with: .init(email: info.email, password: info.password))
-                .subscribe(on: WorkScheduler.backgroundWorkScheduler)
-                .receive(on: WorkScheduler.mainScheduler)
-                .timeout(10, scheduler: WorkScheduler.mainScheduler)
-                .sink { [weak self] completion in
-                    switch completion {
-                    case .finished:
-                        break
-                    case .failure(let error):
-                        print(error)
-                        self?.errorMessagesSubject.send(.unknown)
-                        break
-                    }
-                    self?.loadingProcessing.send(false)
-                } receiveValue: { [weak self] _ in
-                    self?.buttonAvailableSubject.send(false)
-                    self?.onSignIn()
-                }
-                .store(in: &bag)
-        }.store(in: &bag)
-        
-        return States(
-            errorMessages: errorMessagesSubject.eraseToAnyPublisher(),
-            buttonAvailable: buttonAvailableSubject.eraseToAnyPublisher(),
-            loadingProcessing: loadingProcessing.eraseToAnyPublisher()
-        )
+        listenFieldsChanges()
+        listenSignInClicks()
     }
 }
 
 extension LoginViewModel {
-    struct States {
-        let errorMessages: AnyPublisher<ErrorMessage, Never>
-        let buttonAvailable: AnyPublisher<Bool, Never>
-        let loadingProcessing: AnyPublisher<Bool, Never>
+    private func listenFieldsChanges() {
+        emailTextEvents
+            .combineLatest(passwordTextEvents) { email, password in
+                return FieldValidators.valid(email: email) &&
+                FieldValidators.valid(password: password)
+            }
+            .removeDuplicates()
+            .sink { self.buttonAvailableSubject.send($0) }
+            .store(in: &bag)
     }
     
-    struct Events {
-        let emailText: AnyPublisher<String, Never>
-        let passwordText: AnyPublisher<String, Never>
-        let signInClicks: AnyPublisher<FieldsInfo, Never>
+    private func listenSignInClicks() {
+        signInClicksEvents
+            .filter { info in
+                FieldValidators.valid(email: info.email) &&
+                FieldValidators.valid(password: info.password)
+            }
+            .sink { [self] info in
+                loadingProcessingSubject.send(true)
+                signInUser.call(with: .init(email: info.email, password: info.password))
+                    .subscribe(on: WorkScheduler.backgroundWorkScheduler)
+                    .receive(on: WorkScheduler.mainScheduler)
+                    .timeout(10, scheduler: WorkScheduler.mainScheduler, customError: { TimeoutError() })
+                    .sink { [weak self] completion in
+                        switch completion {
+                        case .finished:
+                            break
+                        case .failure(_):
+                            self?.errorMessagesSubject.send(.unknown)
+                            break
+                        }
+                        self?.loadingProcessingSubject.send(false)
+                    } receiveValue: { _ in }
+                    .store(in: &bag)
+            }
+            .store(in: &bag)
     }
 }
 
